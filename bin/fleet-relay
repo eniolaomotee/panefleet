@@ -1,0 +1,41 @@
+#!/bin/bash
+# ==============================
+# Fleet Relay – watches for input files and sends them to tmux panes
+# ==============================
+# Runs inside tmux (in the monitor pane). Picks up response files
+# written by fleet-notify and forwards them to the correct pane.
+#
+# Usage: fleet-relay <tmux-session-name>
+
+SESSION="$1"
+
+if [ -z "$SESSION" ]; then
+  echo "Usage: fleet-relay <tmux-session-name>"
+  exit 1
+fi
+
+RELAY_DIR="/tmp/fleet-${SESSION}-relay"
+mkdir -p "$RELAY_DIR"
+
+while true; do
+  if ! tmux has-session -t "$SESSION" 2>/dev/null; then
+    rm -rf "$RELAY_DIR"
+    exit 0
+  fi
+
+  for CMD_FILE in "$RELAY_DIR"/send-*; do
+    [ -f "$CMD_FILE" ] || continue
+
+    PANE_IDX=$(cat "$CMD_FILE" | head -1)
+    KEY=$(cat "$CMD_FILE" | tail -1)
+
+    if [ -n "$PANE_IDX" ] && [ -n "$KEY" ]; then
+      tmux send-keys -t "$SESSION:0.${PANE_IDX}" "$KEY" Enter 2>/dev/null
+    fi
+
+    rm -f "$CMD_FILE"
+  done
+
+  sleep 1
+done
+

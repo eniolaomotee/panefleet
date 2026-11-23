@@ -1,0 +1,95 @@
+#!/bin/bash
+# Fleet Verify - Auto-verification hook for Claude Code edits
+# Receives JSON on stdin from Claude Code PostToolUse hook
+# Checks: syntax, type errors, lint issues
+
+INPUT=$(cat)
+FILE=$(echo "$INPUT" | jq -r '.tool_input.file_path // empty')
+
+if [ -z "$FILE" ] || [ ! -f "$FILE" ]; then
+  exit 0
+fi
+
+# Detect project root by walking up to find package.json, requirements.txt, or pyproject.toml
+detect_project() {
+  local DIR="$1"
+  while [ "$DIR" != "/" ]; do
+    if [ -f "$DIR/package.json" ] || [ -f "$DIR/requirements.txt" ] || [ -f "$DIR/main.py" ] || [ -f "$DIR/pyproject.toml" ]; then
+      echo "$DIR"
+      return
+    fi
+    DIR=$(dirname "$DIR")
+  done
+}
+
+PROJECT_DIR=$(detect_project "$(dirname "$FILE")")
+EXT="${FILE##*.}"
+
+if [ -z "$PROJECT_DIR" ]; then
+  exit 0
+fi
+
+# ── Python files ──
+if [ "$EXT" = "py" ]; then
+  # Syntax check
+  OUTPUT=$(python -m py_compile "$FILE" 2>&1)
+  if [ $? -ne 0 ]; then
+    echo "{\"decision\": \"block\", \"reason\": \"Python syntax error in $FILE: $OUTPUT\"}"
+    exit 0
+  fi
+
+  # Type check with pyright (if available, non-blocking — warn only)
+  if command -v pyright &>/dev/null; then
+    TYPE_OUTPUT=$(cd "$PROJECT_DIR" && pyright "$FILE" 2>&1)
+    if [ $? -ne 0 ]; then
+      # Extract just the error count line
+      ERROR_SUMMARY=$(echo "$TYPE_OUTPUT" | grep -E "error[s]?" | tail -1)
+      echo "{\"decision\": \"warn\", \"reason\": \"Type errors in $FILE: $ERROR_SUMMARY\"}"
+      exit 0
+    fi
+  fi
+
+  exit 0
+fi
+
+# ── JS/JSX/TS/TSX files ──
+if [[ "$EXT" =~ ^(js|jsx|ts|tsx)$ ]]; then
+  # Syntax check for plain JS
+  if [ "$EXT" = "js" ] && command -v node &>/dev/null; then
+    OUTPUT=$(node --check "$FILE" 2>&1)
+    if [ $? -ne 0 ]; then
+      echo "{\"decision\": \"block\", \"reason\": \"JS syntax error in $FILE: $OUTPUT\"}"
+      exit 0
+    fi
+  fi
+
+  # Type check with tsc if tsconfig.json exists (non-blocking — warn only)
+  if [[ "$EXT" =~ ^(ts|tsx)$ ]] && [ -f "$PROJECT_DIR/tsconfig.json" ]; then
+    TYPE_OUTPUT=$(cd "$PROJECT_DIR" && npx tsc --noEmit --pretty false 2>&1 | grep -F "$FILE")
+    if [ -n "$TYPE_OUTPUT" ]; then
+      # Only report errors in the edited file, not the whole project
+      ERROR_COUNT=$(echo "$TYPE_OUTPUT" | wc -l | tr -d ' ')
+      FIRST_ERROR=$(echo "$TYPE_OUTPUT" | head -1)
+      echo "{\"decision\": \"warn\", \"reason\": \"$ERROR_COUNT type error(s) in $FILE: $FIRST_ERROR\"}"
+      exit 0
+    fi
+  fi
+
+  # ESLint check if available (non-blocking — warn only)
+  if [ -f "$PROJECT_DIR/.eslintrc.json" ] || [ -f "$PROJECT_DIR/.eslintrc.js" ] || [ -f "$PROJECT_DIR/.eslintrc.cjs" ] || [ -f "$PROJECT_DIR/eslint.config.js" ] || [ -f "$PROJECT_DIR/eslint.config.mjs" ]; then
+    if [ -f "$PROJECT_DIR/node_modules/.bin/eslint" ]; then
+      LINT_OUTPUT=$(cd "$PROJECT_DIR" && npx eslint "$FILE" --no-warn-ignored --format compact 2>&1)
+      if [ $? -ne 0 ]; then
+        ERROR_COUNT=$(echo "$LINT_OUTPUT" | grep -c " Error -")
+        if [ "$ERROR_COUNT" -gt 0 ]; then
+          FIRST_ERROR=$(echo "$LINT_OUTPUT" | grep " Error -" | head -1)
+          echo "{\"decision\": \"warn\", \"reason\": \"$ERROR_COUNT lint error(s) in $FILE: $FIRST_ERROR\"}"
+          exit 0
+        fi
+      fi
+    fi
+  fi
+fi
+
+exit 0
+

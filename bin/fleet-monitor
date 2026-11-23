@@ -1,0 +1,319 @@
+#!/bin/bash
+# ==============================
+# Fleet Monitor v7 - Static Control Center
+# ==============================
+
+SESSION="$1"
+
+if [ -z "$SESSION" ]; then
+  echo "Usage: fleet-monitor <tmux-session-name>"
+  exit 1
+fi
+
+CYAN='\033[0;36m'
+YELLOW='\033[1;33m'
+GREEN='\033[0;32m'
+RED='\033[0;31m'
+BOLD='\033[1m'
+DIM='\033[2m'
+NC='\033[0m'
+
+get_agent_panes() {
+  tmux list-panes -t "$SESSION:0" -F "#{pane_index}:#{pane_title}" 2>/dev/null | grep -v "^0:"
+}
+
+resolve_agent() {
+  local NUM="$1"
+  local AGENT_NUM=0
+  while IFS= read -r PANE_LINE; do
+    AGENT_NUM=$((AGENT_NUM + 1))
+    if [ "$AGENT_NUM" -eq "$NUM" ]; then
+      echo "$PANE_LINE"
+      return
+    fi
+  done <<< "$(get_agent_panes)"
+}
+
+show_menu() {
+  clear
+
+  echo -e "${BOLD}Fleet Control Center${NC}  ─  Session: ${CYAN}$SESSION${NC}"
+  echo ""
+  echo -e "  ${CYAN}1-9${NC} zoom into agent    ${CYAN}f${NC} focus agent (no zoom)    ${CYAN}s${NC} file status    ${CYAN}l${NC} view logs    ${CYAN}r${NC} refresh"
+  echo -e "${DIM}  To quit fleet entirely: tmux kill-session -t $SESSION${NC}"
+  echo -e "  ${CYAN}m${NC} toggle mouse for control panel (off=select text, on=click panes)"
+  echo -e "${DIM}  Inside an agent: scroll-wheel scrolls history, drag selects + auto-copies${NC}"
+  echo ""
+  echo -e "${DIM}  F2 = return here from any agent (works inside Claude)${NC}"
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  echo ""
+
+  local PANES
+  PANES=$(get_agent_panes)
+
+  if [ -z "$PANES" ]; then
+    echo -e "  ${DIM}No active agent sessions.${NC}"
+  else
+    local AGENT_NUM=0
+    while IFS= read -r PANE_LINE; do
+      local NAME="${PANE_LINE#*:}"
+      AGENT_NUM=$((AGENT_NUM + 1))
+      echo -e "  ${CYAN}[$AGENT_NUM]${NC}  ${BOLD}$NAME${NC}"
+    done <<< "$PANES"
+  fi
+
+  echo ""
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+}
+
+view_file_status() {
+  clear
+  echo -e "${BOLD}Agent File Status${NC}"
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  echo ""
+
+  local PANES
+  PANES=$(get_agent_panes)
+
+  if [ -z "$PANES" ]; then
+    echo -e "  ${DIM}No active agent sessions.${NC}"
+    echo ""
+    echo -e "${DIM}Press any key to return...${NC}"
+    read -n 1
+    show_menu
+    return
+  fi
+
+  local ALL_FILES=""
+  local AGENT_NUM=0
+
+  while IFS= read -r PANE_LINE; do
+    local PANE_IDX="${PANE_LINE%%:*}"
+    local NAME_FILE="/tmp/fleet-${SESSION}-names/${PANE_IDX}"
+    local NAME
+    if [ -f "$NAME_FILE" ]; then
+      NAME=$(cat "$NAME_FILE")
+    else
+      NAME="${PANE_LINE#*:}"
+    fi
+    AGENT_NUM=$((AGENT_NUM + 1))
+
+    local WORK_DIR
+    WORK_DIR=$(tmux display-message -t "$SESSION:0.${PANE_IDX}" -p '#{pane_current_path}' 2>/dev/null)
+
+    echo -e "  ${CYAN}[$AGENT_NUM]${NC}  ${BOLD}$NAME${NC}"
+
+    if [ -n "$WORK_DIR" ] && [ -d "$WORK_DIR/.git" ] || git -C "$WORK_DIR" rev-parse --git-dir &>/dev/null 2>&1; then
+      local CHANGED
+      CHANGED=$(git -C "$WORK_DIR" diff --name-only 2>/dev/null; git -C "$WORK_DIR" diff --name-only --cached 2>/dev/null)
+      CHANGED=$(echo "$CHANGED" | sort -u | grep -v '^$')
+
+      if [ -n "$CHANGED" ]; then
+        while IFS= read -r F; do
+          local STAT
+          STAT=$(git -C "$WORK_DIR" diff --stat -- "$F" 2>/dev/null | tail -1)
+          echo -e "       ${GREEN}M${NC}  $F  ${DIM}$STAT${NC}"
+          ALL_FILES="${ALL_FILES}${AGENT_NUM}:${F}\n"
+        done <<< "$CHANGED"
+      else
+        echo -e "       ${DIM}no changes${NC}"
+      fi
+
+      local UNTRACKED
+      UNTRACKED=$(git -C "$WORK_DIR" ls-files --others --exclude-standard 2>/dev/null | head -10)
+      if [ -n "$UNTRACKED" ]; then
+        while IFS= read -r F; do
+          echo -e "       ${YELLOW}+${NC}  $F  ${DIM}(new)${NC}"
+          ALL_FILES="${ALL_FILES}${AGENT_NUM}:${F}\n"
+        done <<< "$UNTRACKED"
+      fi
+    else
+      echo -e "       ${DIM}not a git repo${NC}"
+    fi
+
+    echo ""
+  done <<< "$PANES"
+
+  # Check for conflicts — files modified by multiple agents
+  local CONFLICTS
+  CONFLICTS=$(echo -e "$ALL_FILES" | sed 's/^[0-9]*://' | sort | uniq -d)
+
+  if [ -n "$CONFLICTS" ]; then
+    echo -e "  ${RED}${BOLD}⚠ CONFLICTS — files modified by multiple agents:${NC}"
+    while IFS= read -r CF; do
+      [ -z "$CF" ] && continue
+      local WHO
+      WHO=$(echo -e "$ALL_FILES" | grep ":${CF}$" | sed 's/:.*//' | tr '\n' ',' | sed 's/,$//')
+      echo -e "    ${RED}$CF${NC}  ${DIM}(agents: $WHO)${NC}"
+    done <<< "$CONFLICTS"
+    echo ""
+  fi
+
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  echo -e "${DIM}Press any key to return...${NC}"
+  read -n 1
+  show_menu
+}
+
+view_agent_log() {
+  clear
+  echo -e "${BOLD}View Agent Logs${NC}"
+  echo ""
+
+  local PANES
+  PANES=$(get_agent_panes)
+
+  if [ -z "$PANES" ]; then
+    echo -e "  ${DIM}No active agent sessions.${NC}"
+    echo ""
+    echo -e "${DIM}Press any key to return...${NC}"
+    read -n 1
+    show_menu
+    return
+  fi
+
+  local AGENT_NUM=0
+  while IFS= read -r PANE_LINE; do
+    local NAME="${PANE_LINE#*:}"
+    AGENT_NUM=$((AGENT_NUM + 1))
+    echo -e "  ${CYAN}[$AGENT_NUM]${NC}  ${BOLD}$NAME${NC}"
+  done <<< "$PANES"
+
+  echo ""
+  echo -ne "  Agent number (or ${DIM}q${NC} to cancel): "
+  read -n 1 PICK
+  echo ""
+
+  if [ "$PICK" == "q" ] || [ -z "$PICK" ]; then
+    show_menu
+    return
+  fi
+
+  RESOLVED=$(resolve_agent "$PICK")
+  if [ -n "$RESOLVED" ]; then
+    PANE_IDX="${RESOLVED%%:*}"
+    LOG_FILE="/tmp/fleet-${SESSION}-agent-${PANE_IDX}.log"
+
+    if [ -f "$LOG_FILE" ] && [ -s "$LOG_FILE" ]; then
+      # Strip ANSI escape sequences and show in less with search
+      sed 's/\x1b\[[0-9;]*[a-zA-Z]//g; s/\x1b\[[0-9;]*m//g' "$LOG_FILE" | less -R +G
+    else
+      echo -e "  ${DIM}No log data yet for this agent.${NC}"
+      echo ""
+      echo -e "${DIM}Press any key to return...${NC}"
+      read -n 1
+    fi
+  fi
+
+  show_menu
+}
+
+# ── Mouse preference file: remembers what mouse state to restore at control panel ──
+PREF_FILE="/tmp/fleet-${SESSION}-mouse-pref"
+[ -f "$PREF_FILE" ] || echo "on" > "$PREF_FILE"
+
+# ── Mouse bindings that make zoomed agent panes feel like a native terminal ──
+# If the app in the pane handles the mouse itself (mouse_any_flag — Claude Code
+# does, and scrolls its own transcript), forward wheel events to it. Alt-screen
+# panes have no tmux history, so copy-mode there is an empty buffer — hijacking
+# the wheel makes scrolling appear dead. For plain shell panes, scroll-up enters
+# copy-mode and scrolls the pane buffer like a regular terminal's scrollback.
+tmux bind-key -T root WheelUpPane \
+  if-shell -F -t = "#{||:#{pane_in_mode},#{mouse_any_flag}}" \
+    "send-keys -M" \
+    "select-pane -t = ; copy-mode -e ; send-keys -M"
+tmux bind-key -T root WheelDownPane \
+  if-shell -F -t = "#{||:#{pane_in_mode},#{mouse_any_flag}}" \
+    "send-keys -M" \
+    ""
+
+# Drag-select: releasing the mouse after a drag in copy-mode pipes the selection
+# to pbcopy and exits copy-mode. Result: drag → release → paste anywhere.
+tmux bind-key -T copy-mode    MouseDragEnd1Pane send-keys -X copy-pipe-and-cancel "pbcopy"
+tmux bind-key -T copy-mode-vi MouseDragEnd1Pane send-keys -X copy-pipe-and-cancel "pbcopy"
+
+# ── Bind F2 (root table, no prefix needed) to unzoom + return to monitor ──
+# Using root table so it works even when Claude Code captures Ctrl+b
+# Uses #{session_name} so it targets whichever fleet session you're in, not a hardcoded one
+# Also restores the user's preferred mouse state when returning to control panel.
+tmux bind-key -T root F2 run-shell " \
+  SES=\$(tmux display-message -p '#{session_name}'); \
+  FLAG=\$(tmux display-message -t \"\$SES:0\" -p '#{window_zoomed_flag}'); \
+  if [ \"\$FLAG\" = '1' ]; then tmux resize-pane -Z -t \"\$SES:0\"; fi; \
+  tmux select-pane -t \"\$SES:0.0\"; \
+  PREF=\$(cat /tmp/fleet-\$SES-mouse-pref 2>/dev/null); \
+  if [ -n \"\$PREF\" ]; then tmux set-option -t \"\$SES\" mouse \"\$PREF\"; fi"
+
+# Ignore SIGINT (Ctrl+C) and SIGQUIT — accidental hits used to kill the monitor
+# and leave agents orphaned. Use `tmux kill-session -t "$SESSION"` to truly quit.
+trap '' INT QUIT
+
+# ── Main loop ──
+show_menu
+
+while true; do
+  read -n 1 KEY 2>/dev/null
+
+  case "$KEY" in
+    [1-9])
+      RESOLVED=$(resolve_agent "$KEY")
+      if [ -n "$RESOLVED" ]; then
+        PANE_IDX="${RESOLVED%%:*}"
+        # Remember current mouse state so F2 can restore it on return.
+        CURRENT_MOUSE=$(tmux show-option -t "$SESSION" -v mouse 2>/dev/null)
+        [ -n "$CURRENT_MOUSE" ] && echo "$CURRENT_MOUSE" > "$PREF_FILE"
+        # Force mouse ON inside the agent so scroll-wheel scrolls back through
+        # the agent's tmux pane buffer (alt-screen apps have no terminal scrollback)
+        # and drag-select auto-copies to the system clipboard via the bindings below.
+        tmux set-option -t "$SESSION" mouse on
+        tmux select-pane -t "$SESSION:0.${PANE_IDX}"
+        tmux resize-pane -Z -t "$SESSION:0.${PANE_IDX}"
+      fi
+      ;;
+    f)
+      echo ""
+      echo -ne "  Focus agent number: "
+      read -n 1 FKEY
+      echo ""
+      RESOLVED=$(resolve_agent "$FKEY")
+      if [ -n "$RESOLVED" ]; then
+        PANE_IDX="${RESOLVED%%:*}"
+        tmux select-pane -t "$SESSION:0.${PANE_IDX}"
+      fi
+      ;;
+    m)
+      MOUSE_STATE=$(tmux show-option -t "$SESSION" -v mouse 2>/dev/null)
+      if [ "$MOUSE_STATE" = "on" ]; then
+        tmux set-option -t "$SESSION" mouse off
+        echo "off" > "$PREF_FILE"
+        echo -e "  ${YELLOW}Mouse OFF${NC} — select text normally, Cmd+C to copy"
+      else
+        tmux set-option -t "$SESSION" mouse on
+        echo "on" > "$PREF_FILE"
+        echo -e "  ${GREEN}Mouse ON${NC} — click panes to switch"
+      fi
+      sleep 1
+      show_menu
+      ;;
+    s)
+      view_file_status
+      ;;
+    l)
+      view_agent_log
+      ;;
+    r)
+      show_menu
+      ;;
+    q|Q)
+      # Quit hotkey deliberately disabled — pressing q used to be too easy to
+      # hit by accident and would tear down the control center mid-session.
+      # To quit the whole fleet, run: tmux kill-session -t "$SESSION"
+      echo ""
+      echo -e "  ${YELLOW}q is disabled.${NC} To quit the whole fleet:"
+      echo -e "    ${DIM}tmux kill-session -t $SESSION${NC}"
+      sleep 2
+      show_menu
+      ;;
+  esac
+done
+

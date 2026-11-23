@@ -1,0 +1,360 @@
+#!/bin/bash
+
+# ==============================
+# Fleet v6 – Grid Layout with Monitor + Agent Panes
+# ==============================
+
+PARENT_DIR=$(pwd)
+
+# -------------------------------
+# Check dependencies
+# -------------------------------
+for cmd in tmux fzf bat git; do
+  if ! command -v "$cmd" &>/dev/null; then
+    echo "Missing dependency: $cmd"
+    exit 1
+  fi
+done
+
+echo ""
+echo "Select Fleet mode:"
+echo "1) Phases (plan-based)"
+echo "2) Custom Feature"
+echo "3) Hybrid (Phases + Feature)"
+echo "4) General Mode"
+echo ""
+
+read -p "Mode (1-4) > " MODE
+
+# -------------------------------
+# Helper: find git repos
+# -------------------------------
+
+REPOS=()
+
+while IFS= read -r line
+do
+  REPOS+=("$line")
+done < <(find . -maxdepth 2 -name ".git" -type d | sed 's|/.git||')
+
+REPOS+=(".")
+
+echo ""
+echo "Select repo for Claude session:"
+select repo in "${REPOS[@]}"
+do
+  if [ -n "$repo" ]; then
+    break
+  fi
+done
+
+REPO_PATH="$repo"
+
+# -------------------------------
+# Tmux session setup
+# -------------------------------
+
+FLEET_SESSION="fleet-$$"
+PANE_COUNT=0
+
+# Fleet name for identification in Telegram etc.
+REPO_BASENAME=$(basename "$REPO_PATH")
+if [ "$REPO_BASENAME" = "." ]; then
+  REPO_BASENAME=$(basename "$PARENT_DIR")
+fi
+read -p "Fleet name [$REPO_BASENAME]: " FLEET_NAME
+FLEET_NAME="${FLEET_NAME:-$REPO_BASENAME}"
+
+tmux new-session -d -s "$FLEET_SESSION" -n "Fleet" -x "$(tput cols)" -y "$(tput lines)"
+
+# Pane 0 = Monitor (left side, full height)
+
+# -------------------------------
+# Collect agent prompts, then build layout
+# -------------------------------
+
+AGENT_NAMES=()
+AGENT_PROMPTS=()
+AGENT_WORKDIRS=()
+
+queue_agent () {
+  local TITLE="$1"
+  local PROMPT="$2"
+  local WORKDIR="$3"
+  AGENT_NAMES+=("$TITLE")
+  AGENT_PROMPTS+=("$PROMPT")
+  AGENT_WORKDIRS+=("$WORKDIR")
+}
+
+# -------------------------------
+# Mode 1 – Phase Mode
+# -------------------------------
+
+if [ "$MODE" == "1" ]; then
+
+echo ""
+echo "Searching for markdown plans..."
+
+PLAN_FILE=$(find "$PARENT_DIR" -name "*.md" -not -path "*/node_modules/*" -not -path "*/.git/*" | fzf --height 50% --layout=reverse --border \
+  --preview 'bat --style=numbers --color=always --theme=ansi {} | head -50' \
+  --prompt="Select plan.md > ")
+
+if [ -z "$PLAN_FILE" ]; then
+  echo "No plan selected."
+  tmux kill-session -t "$FLEET_SESSION" 2>/dev/null
+  exit 1
+fi
+
+echo ""
+echo "Extracting phases..."
+echo "(Use TAB to select multiple phases, ENTER to confirm)"
+
+SELECTED_PHASES=$(grep -E "^### Phase" "$PLAN_FILE" | fzf --multi --height 50% --layout=reverse --border \
+  --preview-window=right:60%:wrap \
+  --preview "LINE=\$(grep -nF {} \"$PLAN_FILE\" | head -1 | cut -d: -f1); END=\$(tail -n +\$((LINE+1)) \"$PLAN_FILE\" | grep -n '^### ' | head -1 | cut -d: -f1); if [ -n \"\$END\" ]; then sed -n \"\${LINE},\$((LINE+END-1))p\" \"$PLAN_FILE\" | bat --style=plain --color=always --theme=ansi -l md; else tail -n +\$LINE \"$PLAN_FILE\" | bat --style=plain --color=always --theme=ansi -l md; fi" \
+  --prompt="Select phases (TAB=toggle) > ")
+
+if [ -z "$SELECTED_PHASES" ]; then
+  echo "No phases selected."
+  tmux kill-session -t "$FLEET_SESSION" 2>/dev/null
+  exit 1
+fi
+
+AGENT_COUNTER=0
+
+while IFS= read -r PHASE_NAME; do
+  ESCAPED_PHASE=$(printf '%s\n' "$PHASE_NAME" | sed 's/[.[\(*^$+?{|]/\\&/g')
+  PHASE_CONTEXT=$(awk "/$ESCAPED_PHASE/{flag=1;next}/^### Phase/{flag=0}flag" "$PLAN_FILE")
+
+  echo ""
+  echo "─── $PHASE_NAME ───"
+  read -p "How many sessions for this phase? " COUNT </dev/tty
+
+  for ((i=1;i<=COUNT;i++)); do
+    AGENT_COUNTER=$((AGENT_COUNTER + 1))
+
+    PROMPT="You are an autonomous coding agent.
+
+Context
+-------
+Workspace: $PARENT_DIR
+
+Phase:
+$PHASE_NAME
+
+Instructions
+------------
+Only work on tasks in this phase.
+
+Phase Plan
+----------
+$PHASE_CONTEXT
+
+Source plan file:
+$PLAN_FILE
+
+Awaiting user instruction."
+
+    SHORT_NAME=$(echo "$PHASE_NAME" | sed 's/^### //')
+    queue_agent "${SHORT_NAME}-A$i" "$PROMPT" "$REPO_PATH"
+  done
+done <<< "$SELECTED_PHASES"
+
+fi
+
+# -------------------------------
+# Mode 2 – Feature Mode
+# -------------------------------
+
+if [ "$MODE" == "2" ]; then
+
+echo ""
+read -p "Feature name: " FEATURE
+
+PROMPT="You are an autonomous coding agent.
+
+Workspace:
+$PARENT_DIR
+
+Feature:
+$FEATURE
+
+Awaiting user instruction."
+
+read -p "How many Claude sessions? " COUNT
+
+for ((i=1;i<=COUNT;i++))
+do
+  queue_agent "Agent-$i" "$PROMPT" "$REPO_PATH"
+done
+
+fi
+
+# -------------------------------
+# Mode 3 – Hybrid Mode
+# -------------------------------
+
+if [ "$MODE" == "3" ]; then
+
+echo ""
+echo "Hybrid mode selected."
+
+read -p "Feature name: " FEATURE
+
+read -p "How many phase agents? " PHASE_COUNT
+read -p "How many feature agents? " FEATURE_COUNT
+
+PHASE_PROMPT="You are an autonomous coding agent.
+
+Workspace:
+$PARENT_DIR
+
+Feature Context:
+$FEATURE
+
+Focus on the current phase tasks.
+
+Awaiting user instruction."
+
+FEATURE_PROMPT="You are an autonomous coding agent.
+
+Workspace:
+$PARENT_DIR
+
+Feature:
+$FEATURE
+
+You may work across any required components.
+
+Awaiting user instruction."
+
+for ((i=1;i<=PHASE_COUNT;i++))
+do
+  queue_agent "Phase-$i" "$PHASE_PROMPT" "$REPO_PATH"
+done
+
+for ((i=1;i<=FEATURE_COUNT;i++))
+do
+  queue_agent "Feature-$i" "$FEATURE_PROMPT" "$REPO_PATH"
+done
+
+fi
+
+# -------------------------------
+# Mode 4 – General Mode
+# -------------------------------
+
+if [ "$MODE" == "4" ]; then
+
+echo ""
+read -p "Optional branch/worktree? (y/n) " WORKTREE
+
+if [ "$WORKTREE" == "y" ]; then
+
+  read -p "Branch name: " BRANCH
+
+  SAFE_BRANCH=$(echo "$BRANCH" | tr ' ' '-')
+
+  git -C "$REPO_PATH" worktree add "$REPO_PATH/../wt-$SAFE_BRANCH" -b "$SAFE_BRANCH"
+
+  REPO_PATH="$REPO_PATH/../wt-$SAFE_BRANCH"
+
+fi
+
+read -p "How many Claude sessions to launch? " COUNT
+
+PROMPT="You are an autonomous coding agent.
+
+Workspace:
+$PARENT_DIR
+
+General development session.
+
+Awaiting user instruction."
+
+for ((i=1;i<=COUNT;i++))
+do
+  queue_agent "Agent-$i" "$PROMPT" "$REPO_PATH"
+done
+
+fi
+
+# -------------------------------
+# Build grid layout: Monitor (left) | Agents stacked (right)
+# -------------------------------
+
+TOTAL_AGENTS=${#AGENT_NAMES[@]}
+
+if [ "$TOTAL_AGENTS" -eq 0 ]; then
+  echo "No agents to launch."
+  tmux kill-session -t "$FLEET_SESSION" 2>/dev/null
+  exit 1
+fi
+
+# Create agent panes by splitting from pane 0
+for ((i=0;i<TOTAL_AGENTS;i++)); do
+  tmux split-window -t "$FLEET_SESSION:0"
+done
+
+# Apply main-vertical layout: pane 0 = full-height left, rest stacked right
+tmux select-layout -t "$FLEET_SESSION:0" main-vertical
+
+# Set monitor (left pane) to 45% width
+tmux resize-pane -t "$FLEET_SESSION:0.0" -x 45%
+
+# Store pane names in files so they persist even when Claude overrides pane titles
+NAME_DIR="/tmp/fleet-${FLEET_SESSION}-names"
+mkdir -p "$NAME_DIR"
+echo "Control Center" > "$NAME_DIR/0"
+echo "$FLEET_NAME" > "/tmp/fleet-${FLEET_SESSION}-name"
+
+# Label and launch commands in each agent pane
+for ((i=0;i<TOTAL_AGENTS;i++)); do
+  PANE_IDX=$((i + 1))
+  PROMPT_FILE="/tmp/fleet-${FLEET_SESSION}-${PANE_IDX}.txt"
+  printf '%s' "${AGENT_PROMPTS[$i]}" > "$PROMPT_FILE"
+
+  # Save pane name to file (immune to Claude overriding pane title)
+  echo "${AGENT_NAMES[$i]}" > "$NAME_DIR/$PANE_IDX"
+
+  # Log pane output to file for scrollback
+  LOG_FILE="/tmp/fleet-${FLEET_SESSION}-agent-${PANE_IDX}.log"
+  : > "$LOG_FILE"
+  tmux pipe-pane -o -t "$FLEET_SESSION:0.${PANE_IDX}" "cat >> '$LOG_FILE'"
+
+  # Launch claude in the pane
+  tmux send-keys -t "$FLEET_SESSION:0.${PANE_IDX}" "cd '${AGENT_WORKDIRS[$i]}' && claude < '$PROMPT_FILE'; rm -f '$PROMPT_FILE'" Enter
+done
+
+# Enable mouse — click any pane to focus it
+tmux set-option -t "$FLEET_SESSION" mouse on
+
+# Enable pane titles with file-based lookup (Claude can't override these)
+tmux set-option -t "$FLEET_SESSION" pane-border-status top
+tmux set-option -t "$FLEET_SESSION" pane-border-format " #(cat '$NAME_DIR/#{pane_index}' 2>/dev/null || echo 'Pane #{pane_index}') "
+
+# Launch notification watcher in background
+fleet-notify "$FLEET_SESSION" &
+NOTIFY_PID=$!
+
+# Launch Telegram control panel if not already running
+pgrep -f fleet-telegram >/dev/null || fleet-telegram &
+
+# Launch relay in background inside tmux, then start monitor
+tmux send-keys -t "$FLEET_SESSION:0.0" "fleet-relay '$FLEET_SESSION' &" Enter
+sleep 1
+tmux send-keys -t "$FLEET_SESSION:0.0" "fleet-monitor '$FLEET_SESSION'" Enter
+
+# Focus on the monitor pane
+tmux select-pane -t "$FLEET_SESSION:0.0"
+
+# Clean up notifier on exit
+trap "kill $NOTIFY_PID 2>/dev/null" EXIT
+
+# Attach to session (switch-client when already inside tmux — attach refuses to nest)
+if [ -n "$TMUX" ]; then
+  tmux switch-client -t "$FLEET_SESSION"
+else
+  tmux attach -t "$FLEET_SESSION"
+fi
+
