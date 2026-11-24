@@ -42,14 +42,15 @@ mode_of() {
   stat -c %a "$1" 2>/dev/null || stat -f %Lp "$1"
 }
 
-# Stub every external command the launcher can start, and run it with a PATH
-# limited to the stubs, bin/ and the system dirs. The launcher still tries to
-# start fleet-telegram (issue #3); without this it would run whatever copy
-# is on the developer's own PATH.
+# Stub every external command the launcher can start. Launcher tests run with
+# a PATH limited to the stubs, bin/ and the system dirs, so the launcher can
+# never reach a tool on the developer's own PATH. Each stub records its name
+# when it is run.
 stub_launcher_tools() {
   local tool
+  export STUB_CALLS="$WORK/stub-calls.log"
   for tool in fzf bat git claude fleet-telegram; do
-    printf '#!/bin/bash\nexit 0\n' > "$STUB/$tool"
+    printf '#!/bin/bash\necho "%s" >> "$STUB_CALLS"\nexit 0\n' "$tool" > "$STUB/$tool"
     chmod +x "$STUB/$tool"
   done
 }
@@ -250,6 +251,17 @@ load_lib() {
   grep -q "pipe-pane .*$SESSION_DIR/agent-1.log" "$TMUX_STUB_LOG"
   grep -q "pane-border-format .*$SESSION_DIR/names/" "$TMUX_STUB_LOG"
   grep -q "claude < '$SESSION_DIR/prompt-1.txt'" "$TMUX_STUB_LOG"
+}
+
+@test "launcher does not start a Telegram bridge" {
+  stub_launcher_tools
+  mkdir "$WORK/project"
+  cd "$WORK/project"
+  PATH="$STUB:$BIN:/usr/bin:/bin" run bash -c "printf '4\n1\n\nn\n2\n' | '$BIN/fleet'"
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"command not found"* ]]
+  # The stub is on PATH, so any attempt to start it would be recorded.
+  ! grep -qx 'fleet-telegram' "$STUB_CALLS" 2>/dev/null
 }
 
 @test "launcher stops and kills its session when the state dir cannot be trusted" {
