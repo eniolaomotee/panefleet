@@ -34,7 +34,7 @@ git clone https://github.com/eniolaomotee/panefleet.git
 export PATH="$PWD/panefleet/bin:$PATH"
 ```
 
-The scripts call each other by name, so `bin/` must be on your `PATH`.
+The scripts call each other by name, so `bin/` must be on your `PATH`. They also load `lib/state.sh` relative to their own location, so keep the checkout intact instead of copying single scripts elsewhere.
 
 ## First run
 
@@ -62,9 +62,22 @@ To stop everything: `tmux kill-session -t <session-name>`. The session name is s
 
 TODO: document the `PostToolUse` entry for `~/.claude/settings.json`.
 
+## Where state lives
+
+Each fleet keeps its runtime state in a private directory:
+
+```
+${XDG_STATE_HOME:-~/.local/state}/panefleet/<session>/
+```
+
+It holds the pane labels, the agent prompts, the per-agent logs, the mouse preference and the relay directory. The directories are created with mode 700. If one already exists with a different owner or looser permissions, the scripts stop with an error instead of using it.
+
+The relay types the contents of `relay/send-*` files into agent panes, which amounts to running commands as you. It only reads regular files you own, from that private directory, and re-checks the directory on every pass.
+
+State is removed when the session ends. Anything left behind by a crash is cleared the next time you run `fleet`. Agent logs go with it, so copy a log out first if you want to keep it.
+
 ## Known limits
 
-- **State lives in `/tmp`.** Session state, logs and the relay directory are at predictable paths in `/tmp`. On a machine with other local users this is unsafe. See [#2](https://github.com/eniolaomotee/panefleet/issues/2).
 - **The launcher tries to start `fleet-telegram`,** which is not in this repo, so each launch prints a `command not found` error. See [#3](https://github.com/eniolaomotee/panefleet/issues/3).
 - **tmux key bindings are server-wide.** The monitor binds `F2`, the mouse wheel and drag-to-copy in the root table, which affects your other tmux sessions until the server restarts.
 - **`fleet-notify` is a stub.** It logs one line and exits.
@@ -75,8 +88,8 @@ TODO: document the `PostToolUse` entry for `~/.claude/settings.json`.
 ## Development
 
 ```bash
-brew install shellcheck bats-core
-shellcheck --severity=error bin/*
+brew install shellcheck bats-core tmux
+shellcheck --severity=error bin/* lib/*.sh
 bats test
 ```
 
