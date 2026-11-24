@@ -2,8 +2,13 @@
 # ==============================
 # Fleet Relay – watches for input files and sends them to tmux panes
 # ==============================
-# Runs inside tmux (in the monitor pane). Picks up response files
-# written by fleet-notify and forwards them to the correct pane.
+# Runs inside tmux (in the monitor pane). Picks up request files from the
+# session's private relay directory and types them into the target pane.
+#
+# A request is a file named send-* with the pane index on the first line and
+# the text to type on the last line. Anything typed into an agent pane is
+# effectively a command run as you, so the relay only reads from a directory
+# that is owned by you with mode 700, and re-checks that on every pass.
 #
 # Usage: fleet-relay <tmux-session-name>
 
@@ -14,22 +19,39 @@ if [ -z "$SESSION" ]; then
   exit 1
 fi
 
-RELAY_DIR="/tmp/fleet-${SESSION}-relay"
-mkdir -p "$RELAY_DIR"
+# shellcheck source=../lib/state.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../lib/state.sh"
+
+STATE_DIR=$(fleet_state_init "$SESSION") || exit 1
+RELAY_DIR="$STATE_DIR/relay"
+
+# Remove the session's state once the session is gone. If the relay is
+# stopped while the session is still alive, the state is left for the monitor.
+cleanup() {
+  tmux has-session -t "$SESSION" 2>/dev/null || fleet_state_remove "$SESSION"
+}
+trap cleanup EXIT
+trap 'exit 0' HUP TERM
 
 while true; do
   if ! tmux has-session -t "$SESSION" 2>/dev/null; then
-    rm -rf "$RELAY_DIR"
     exit 0
   fi
 
+  if ! fleet_dir_is_private "$STATE_DIR" || ! fleet_dir_is_private "$RELAY_DIR"; then
+    echo "fleet-relay: $RELAY_DIR is no longer private (owner or mode changed), stopping" >&2
+    trap - EXIT
+    exit 1
+  fi
+
   for CMD_FILE in "$RELAY_DIR"/send-*; do
-    [ -f "$CMD_FILE" ] || continue
+    # Regular files owned by us only: no symlinks, no files dropped by others.
+    [ -f "$CMD_FILE" ] && [ ! -L "$CMD_FILE" ] && [ -O "$CMD_FILE" ] || continue
 
-    PANE_IDX=$(cat "$CMD_FILE" | head -1)
-    KEY=$(cat "$CMD_FILE" | tail -1)
+    PANE_IDX=$(head -1 "$CMD_FILE")
+    KEY=$(tail -1 "$CMD_FILE")
 
-    if [ -n "$PANE_IDX" ] && [ -n "$KEY" ]; then
+    if [[ "$PANE_IDX" =~ ^[0-9]+$ ]] && [ -n "$KEY" ]; then
       tmux send-keys -t "$SESSION:0.${PANE_IDX}" "$KEY" Enter 2>/dev/null
     fi
 
@@ -38,4 +60,3 @@ while true; do
 
   sleep 1
 done
-
