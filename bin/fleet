@@ -6,6 +6,9 @@
 
 PARENT_DIR=$(pwd)
 
+# shellcheck source=../lib/state.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../lib/state.sh"
+
 # -------------------------------
 # Check dependencies
 # -------------------------------
@@ -57,7 +60,8 @@ REPO_PATH="$repo"
 FLEET_SESSION="fleet-$$"
 PANE_COUNT=0
 
-# Fleet name for identification in Telegram etc.
+# Fleet name: a human-readable label, saved in the state dir so other tools
+# can tell fleets apart.
 REPO_BASENAME=$(basename "$REPO_PATH")
 if [ "$REPO_BASENAME" = "." ]; then
   REPO_BASENAME=$(basename "$PARENT_DIR")
@@ -66,6 +70,14 @@ read -p "Fleet name [$REPO_BASENAME]: " FLEET_NAME
 FLEET_NAME="${FLEET_NAME:-$REPO_BASENAME}"
 
 tmux new-session -d -s "$FLEET_SESSION" -n "Fleet" -x "$(tput cols)" -y "$(tput lines)"
+
+# Private per-user state directory (mode 700). Clear out state from fleets
+# that are no longer running, then create ours.
+fleet_state_prune
+if ! STATE_DIR=$(fleet_state_init "$FLEET_SESSION"); then
+  tmux kill-session -t "$FLEET_SESSION" 2>/dev/null
+  exit 1
+fi
 
 # Pane 0 = Monitor (left side, full height)
 
@@ -303,22 +315,21 @@ tmux select-layout -t "$FLEET_SESSION:0" main-vertical
 tmux resize-pane -t "$FLEET_SESSION:0.0" -x 45%
 
 # Store pane names in files so they persist even when Claude overrides pane titles
-NAME_DIR="/tmp/fleet-${FLEET_SESSION}-names"
-mkdir -p "$NAME_DIR"
+NAME_DIR="$STATE_DIR/names"
 echo "Control Center" > "$NAME_DIR/0"
-echo "$FLEET_NAME" > "/tmp/fleet-${FLEET_SESSION}-name"
+echo "$FLEET_NAME" > "$STATE_DIR/name"
 
 # Label and launch commands in each agent pane
 for ((i=0;i<TOTAL_AGENTS;i++)); do
   PANE_IDX=$((i + 1))
-  PROMPT_FILE="/tmp/fleet-${FLEET_SESSION}-${PANE_IDX}.txt"
+  PROMPT_FILE="$STATE_DIR/prompt-${PANE_IDX}.txt"
   printf '%s' "${AGENT_PROMPTS[$i]}" > "$PROMPT_FILE"
 
   # Save pane name to file (immune to Claude overriding pane title)
   echo "${AGENT_NAMES[$i]}" > "$NAME_DIR/$PANE_IDX"
 
   # Log pane output to file for scrollback
-  LOG_FILE="/tmp/fleet-${FLEET_SESSION}-agent-${PANE_IDX}.log"
+  LOG_FILE="$STATE_DIR/agent-${PANE_IDX}.log"
   : > "$LOG_FILE"
   tmux pipe-pane -o -t "$FLEET_SESSION:0.${PANE_IDX}" "cat >> '$LOG_FILE'"
 
@@ -336,9 +347,6 @@ tmux set-option -t "$FLEET_SESSION" pane-border-format " #(cat '$NAME_DIR/#{pane
 # Launch notification watcher in background
 fleet-notify "$FLEET_SESSION" &
 NOTIFY_PID=$!
-
-# Launch Telegram control panel if not already running
-pgrep -f fleet-telegram >/dev/null || fleet-telegram &
 
 # Launch relay in background inside tmux, then start monitor
 tmux send-keys -t "$FLEET_SESSION:0.0" "fleet-relay '$FLEET_SESSION' &" Enter
