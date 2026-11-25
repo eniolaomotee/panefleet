@@ -60,7 +60,8 @@ REPO_PATH="$repo"
 FLEET_SESSION="fleet-$$"
 PANE_COUNT=0
 
-# Fleet name for identification in Telegram etc.
+# Fleet name: a human-readable label, saved in the state dir so other tools
+# can tell fleets apart.
 REPO_BASENAME=$(basename "$REPO_PATH")
 if [ "$REPO_BASENAME" = "." ]; then
   REPO_BASENAME=$(basename "$PARENT_DIR")
@@ -346,9 +347,6 @@ tmux set-option -t "$FLEET_SESSION" pane-border-format " #(cat '$NAME_DIR/#{pane
 # Launch notification watcher in background
 fleet-notify "$FLEET_SESSION" &
 NOTIFY_PID=$!
-
-# Launch Telegram control panel if not already running
-pgrep -f fleet-telegram >/dev/null || fleet-telegram &
 
 # Launch relay in background inside tmux, then start monitor
 tmux send-keys -t "$FLEET_SESSION:0.0" "fleet-relay '$FLEET_SESSION' &" Enter

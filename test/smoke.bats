@@ -24,6 +24,14 @@ teardown() {
   done
 }
 
+@test "scripts only reference fleet-* commands that are shipped in bin/" {
+  refs=$(grep -ohE 'fleet-[a-z]+' "$BIN"/* "$BIN"/../lib/* | sort -u)
+  [ -n "$refs" ]
+  for name in $refs; do
+    [ -x "$BIN/$name" ] || { echo "$name is referenced but not in bin/"; return 1; }
+  done
+}
+
 @test "fleet-monitor without a session prints usage and exits 1" {
   run "$BIN/fleet-monitor"
   [ "$status" -eq 1 ]

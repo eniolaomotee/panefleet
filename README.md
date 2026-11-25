@@ -78,7 +78,6 @@ State is removed when the session ends. Anything left behind by a crash is clear
 
 ## Known limits
 
-- **The launcher tries to start `fleet-telegram`,** which is not in this repo, so each launch prints a `command not found` error. See [#3](https://github.com/eniolaomotee/panefleet/issues/3).
 - **tmux key bindings are server-wide.** The monitor binds `F2`, the mouse wheel and drag-to-copy in the root table, which affects your other tmux sessions until the server restarts.
 - **`fleet-notify` is a stub.** It logs one line and exits.
 - **The launcher is interactive only.** There are no flags or config file yet.
