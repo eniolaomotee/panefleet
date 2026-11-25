@@ -96,4 +96,4 @@ CI runs the same checks plus a gitleaks secret scan on every pull request.
 
 ## License
 
-No license has been chosen yet. Until one is added, all rights are reserved.
+[MIT](LICENSE)
