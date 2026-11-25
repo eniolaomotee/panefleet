@@ -1,9 +1,10 @@
 #!/bin/bash
 # Fleet Notify - Silent Version (No Popups)
 
+# Usage: fleet-notify <agent-or-session> <message> [type]
+# The type argument is accepted for compatibility and ignored.
 PANE_ID="$1"
 MESSAGE="$2"
-TYPE="$3"
 
 # Log the activity so you can still see it in the monitor
 # shellcheck source=../lib/state.sh

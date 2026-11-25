@@ -27,7 +27,7 @@ echo "3) Hybrid (Phases + Feature)"
 echo "4) General Mode"
 echo ""
 
-read -p "Mode (1-4) > " MODE
+read -r -p "Mode (1-4) > " MODE
 
 # -------------------------------
 # Helper: find git repos
@@ -58,7 +58,6 @@ REPO_PATH="$repo"
 # -------------------------------
 
 FLEET_SESSION="fleet-$$"
-PANE_COUNT=0
 
 # Fleet name: a human-readable label, saved in the state dir so other tools
 # can tell fleets apart.
@@ -66,7 +65,7 @@ REPO_BASENAME=$(basename "$REPO_PATH")
 if [ "$REPO_BASENAME" = "." ]; then
   REPO_BASENAME=$(basename "$PARENT_DIR")
 fi
-read -p "Fleet name [$REPO_BASENAME]: " FLEET_NAME
+read -r -p "Fleet name [$REPO_BASENAME]: " FLEET_NAME
 FLEET_NAME="${FLEET_NAME:-$REPO_BASENAME}"
 
 tmux new-session -d -s "$FLEET_SESSION" -n "Fleet" -x "$(tput cols)" -y "$(tput lines)"
@@ -140,7 +139,7 @@ while IFS= read -r PHASE_NAME; do
 
   echo ""
   echo "─── $PHASE_NAME ───"
-  read -p "How many sessions for this phase? " COUNT </dev/tty
+  read -r -p "How many sessions for this phase? " COUNT </dev/tty
 
   for ((i=1;i<=COUNT;i++)); do
     AGENT_COUNTER=$((AGENT_COUNTER + 1))
@@ -167,7 +166,7 @@ $PLAN_FILE
 
 Awaiting user instruction."
 
-    SHORT_NAME=$(echo "$PHASE_NAME" | sed 's/^### //')
+    SHORT_NAME="${PHASE_NAME#\#\#\# }"
     queue_agent "${SHORT_NAME}-A$i" "$PROMPT" "$REPO_PATH"
   done
 done <<< "$SELECTED_PHASES"
@@ -181,7 +180,7 @@ fi
 if [ "$MODE" == "2" ]; then
 
 echo ""
-read -p "Feature name: " FEATURE
+read -r -p "Feature name: " FEATURE
 
 PROMPT="You are an autonomous coding agent.
 
@@ -193,7 +192,7 @@ $FEATURE
 
 Awaiting user instruction."
 
-read -p "How many Claude sessions? " COUNT
+read -r -p "How many Claude sessions? " COUNT
 
 for ((i=1;i<=COUNT;i++))
 do
@@ -211,10 +210,10 @@ if [ "$MODE" == "3" ]; then
 echo ""
 echo "Hybrid mode selected."
 
-read -p "Feature name: " FEATURE
+read -r -p "Feature name: " FEATURE
 
-read -p "How many phase agents? " PHASE_COUNT
-read -p "How many feature agents? " FEATURE_COUNT
+read -r -p "How many phase agents? " PHASE_COUNT
+read -r -p "How many feature agents? " FEATURE_COUNT
 
 PHASE_PROMPT="You are an autonomous coding agent.
 
@@ -259,11 +258,11 @@ fi
 if [ "$MODE" == "4" ]; then
 
 echo ""
-read -p "Optional branch/worktree? (y/n) " WORKTREE
+read -r -p "Optional branch/worktree? (y/n) " WORKTREE
 
 if [ "$WORKTREE" == "y" ]; then
 
-  read -p "Branch name: " BRANCH
+  read -r -p "Branch name: " BRANCH
 
   SAFE_BRANCH=$(echo "$BRANCH" | tr ' ' '-')
 
@@ -273,7 +272,7 @@ if [ "$WORKTREE" == "y" ]; then
 
 fi
 
-read -p "How many Claude sessions to launch? " COUNT
+read -r -p "How many Claude sessions to launch? " COUNT
 
 PROMPT="You are an autonomous coding agent.
 
@@ -357,7 +356,7 @@ tmux send-keys -t "$FLEET_SESSION:0.0" "fleet-monitor '$FLEET_SESSION'" Enter
 tmux select-pane -t "$FLEET_SESSION:0.0"
 
 # Clean up notifier on exit
-trap "kill $NOTIFY_PID 2>/dev/null" EXIT
+trap 'kill "$NOTIFY_PID" 2>/dev/null' EXIT
 
 # Attach to session (switch-client when already inside tmux — attach refuses to nest)
 if [ -n "$TMUX" ]; then

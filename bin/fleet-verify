@@ -32,16 +32,14 @@ fi
 # ── Python files ──
 if [ "$EXT" = "py" ]; then
   # Syntax check
-  OUTPUT=$(python -m py_compile "$FILE" 2>&1)
-  if [ $? -ne 0 ]; then
+  if ! OUTPUT=$(python -m py_compile "$FILE" 2>&1); then
     echo "{\"decision\": \"block\", \"reason\": \"Python syntax error in $FILE: $OUTPUT\"}"
     exit 0
   fi
 
   # Type check with pyright (if available, non-blocking — warn only)
   if command -v pyright &>/dev/null; then
-    TYPE_OUTPUT=$(cd "$PROJECT_DIR" && pyright "$FILE" 2>&1)
-    if [ $? -ne 0 ]; then
+    if ! TYPE_OUTPUT=$(cd "$PROJECT_DIR" && pyright "$FILE" 2>&1); then
       # Extract just the error count line
       ERROR_SUMMARY=$(echo "$TYPE_OUTPUT" | grep -E "error[s]?" | tail -1)
       echo "{\"decision\": \"warn\", \"reason\": \"Type errors in $FILE: $ERROR_SUMMARY\"}"
@@ -56,8 +54,7 @@ fi
 if [[ "$EXT" =~ ^(js|jsx|ts|tsx)$ ]]; then
   # Syntax check for plain JS
   if [ "$EXT" = "js" ] && command -v node &>/dev/null; then
-    OUTPUT=$(node --check "$FILE" 2>&1)
-    if [ $? -ne 0 ]; then
+    if ! OUTPUT=$(node --check "$FILE" 2>&1); then
       echo "{\"decision\": \"block\", \"reason\": \"JS syntax error in $FILE: $OUTPUT\"}"
       exit 0
     fi
@@ -78,8 +75,7 @@ if [[ "$EXT" =~ ^(js|jsx|ts|tsx)$ ]]; then
   # ESLint check if available (non-blocking — warn only)
   if [ -f "$PROJECT_DIR/.eslintrc.json" ] || [ -f "$PROJECT_DIR/.eslintrc.js" ] || [ -f "$PROJECT_DIR/.eslintrc.cjs" ] || [ -f "$PROJECT_DIR/eslint.config.js" ] || [ -f "$PROJECT_DIR/eslint.config.mjs" ]; then
     if [ -f "$PROJECT_DIR/node_modules/.bin/eslint" ]; then
-      LINT_OUTPUT=$(cd "$PROJECT_DIR" && npx eslint "$FILE" --no-warn-ignored --format compact 2>&1)
-      if [ $? -ne 0 ]; then
+      if ! LINT_OUTPUT=$(cd "$PROJECT_DIR" && npx eslint "$FILE" --no-warn-ignored --format compact 2>&1); then
         ERROR_COUNT=$(echo "$LINT_OUTPUT" | grep -c " Error -")
         if [ "$ERROR_COUNT" -gt 0 ]; then
           FIRST_ERROR=$(echo "$LINT_OUTPUT" | grep " Error -" | head -1)
