@@ -50,9 +50,19 @@ stub_launcher_tools() {
   local tool
   export STUB_CALLS="$WORK/stub-calls.log"
   for tool in fzf bat git claude fleet-telegram; do
+    # shellcheck disable=SC2016  # $STUB_CALLS must expand when the stub runs
     printf '#!/bin/bash\necho "%s" >> "$STUB_CALLS"\nexit 0\n' "$tool" > "$STUB/$tool"
     chmod +x "$STUB/$tool"
   done
+}
+
+# Fail if the command succeeds. A bare `! cmd` does not fail a bats test
+# unless it is the last line, so negative assertions go through this.
+refute() {
+  if "$@"; then
+    echo "expected to fail: $*"
+    return 1
+  fi
 }
 
 load_lib() {
@@ -98,6 +108,7 @@ load_lib() {
 
 @test "state init rejects session names that could escape the base dir" {
   load_lib
+  # shellcheck disable=SC2016  # the literal string is the test input
   for bad in "" ".." "../x" "a/b" ".hidden" "a b" '$(id)'; do
     run fleet_state_init "$bad"
     [ "$status" -eq 1 ] || { echo "accepted: '$bad'"; return 1; }
@@ -162,7 +173,7 @@ load_lib() {
   PATH="$STUB:$PATH" run "$BIN/fleet-relay" s1
   [ "$status" -eq 1 ]
   [[ "$output" == *"refusing to use"* ]]
-  ! grep -q '^send-keys' "$TMUX_STUB_LOG" 2>/dev/null
+  refute grep -q '^send-keys' "$TMUX_STUB_LOG"
   # The untrusted directory is left alone.
   [ -f "$BASE/s1/relay/send-evil" ]
 }
@@ -206,7 +217,8 @@ load_lib() {
     sleep 0.2
   done
   tmux capture-pane -p -t fleet-e2e:0.1 | grep -q 'hello-from-relay'
-  ! tmux capture-pane -p -t fleet-e2e:0.0 | grep -q 'hello-from-relay'
+  tmux capture-pane -p -t fleet-e2e:0.0 > "$WORK/pane0.txt"
+  refute grep -q 'hello-from-relay' "$WORK/pane0.txt"
   [ ! -e "$DIR/relay/send-1" ]
 
   tmux kill-session -t fleet-e2e
@@ -214,7 +226,7 @@ load_lib() {
     kill -0 "$RELAY_PID" 2>/dev/null || break
     sleep 0.2
   done
-  ! kill -0 "$RELAY_PID" 2>/dev/null
+  refute kill -0 "$RELAY_PID"
   [ ! -e "$BASE/fleet-e2e" ]
 }
 
@@ -261,7 +273,7 @@ load_lib() {
   [ "$status" -eq 0 ]
   [[ "$output" != *"command not found"* ]]
   # The stub is on PATH, so any attempt to start it would be recorded.
-  ! grep -qx 'fleet-telegram' "$STUB_CALLS" 2>/dev/null
+  refute grep -qx 'fleet-telegram' "$STUB_CALLS"
 }
 
 @test "launcher stops and kills its session when the state dir cannot be trusted" {
@@ -274,5 +286,5 @@ load_lib() {
   [ "$status" -eq 1 ]
   [[ "$output" == *"refusing to use"* ]]
   grep -q '^kill-session' "$TMUX_STUB_LOG"
-  ! grep -q '^send-keys' "$TMUX_STUB_LOG"
+  refute grep -q '^send-keys' "$TMUX_STUB_LOG"
 }
