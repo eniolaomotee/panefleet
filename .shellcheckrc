@@ -1,0 +1,3 @@
+# Follow the `source=` directives so sourced files are checked too.
+external-sources=true
+source-path=SCRIPTDIR

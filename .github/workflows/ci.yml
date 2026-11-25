@@ -20,8 +20,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      # Gated at error until the imported scripts are cleaned up (issue #4).
-      - run: shellcheck --version && shellcheck --severity=error bin/* lib/*.sh
+      - run: shellcheck --version && shellcheck bin/* lib/*.sh test/*.bats
 
   test:
     name: bats
