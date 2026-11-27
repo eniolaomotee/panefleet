@@ -85,7 +85,7 @@ view_file_status() {
     echo -e "  ${DIM}No active agent sessions.${NC}"
     echo ""
     echo -e "${DIM}Press any key to return...${NC}"
-    read -n 1
+    read -r -n 1
     show_menu
     return
   fi
@@ -157,7 +157,7 @@ view_file_status() {
 
   echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
   echo -e "${DIM}Press any key to return...${NC}"
-  read -n 1
+  read -r -n 1
   show_menu
 }
 
@@ -173,7 +173,7 @@ view_agent_log() {
     echo -e "  ${DIM}No active agent sessions.${NC}"
     echo ""
     echo -e "${DIM}Press any key to return...${NC}"
-    read -n 1
+    read -r -n 1
     show_menu
     return
   fi
@@ -187,7 +187,7 @@ view_agent_log() {
 
   echo ""
   echo -ne "  Agent number (or ${DIM}q${NC} to cancel): "
-  read -n 1 PICK
+  read -r -n 1 PICK
   echo ""
 
   if [ "$PICK" == "q" ] || [ -z "$PICK" ]; then
@@ -207,7 +207,7 @@ view_agent_log() {
       echo -e "  ${DIM}No log data yet for this agent.${NC}"
       echo ""
       echo -e "${DIM}Press any key to return...${NC}"
-      read -n 1
+      read -r -n 1
     fi
   fi
 
@@ -259,7 +259,7 @@ trap '' INT QUIT
 show_menu
 
 while true; do
-  read -n 1 KEY 2>/dev/null
+  read -r -n 1 KEY 2>/dev/null
 
   case "$KEY" in
     [1-9])
@@ -280,7 +280,7 @@ while true; do
     f)
       echo ""
       echo -ne "  Focus agent number: "
-      read -n 1 FKEY
+      read -r -n 1 FKEY
       echo ""
       RESOLVED=$(resolve_agent "$FKEY")
       if [ -n "$RESOLVED" ]; then

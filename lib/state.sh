@@ -50,7 +50,9 @@ fleet_valid_session() {
 # Succeed if the directory is a real directory, owned by us, with mode 700.
 fleet_dir_is_private() {
   local dir="$1" mode
-  [ -d "$dir" ] && [ ! -L "$dir" ] && [ -O "$dir" ] || return 1
+  if [ ! -d "$dir" ] || [ -L "$dir" ] || [ ! -O "$dir" ]; then
+    return 1
+  fi
   # GNU stat first: on Linux `stat -f` means something else and would succeed.
   mode=$(stat -c %a "$dir" 2>/dev/null || stat -f %Lp "$dir" 2>/dev/null) || return 1
   [ "$mode" = "700" ]
@@ -118,7 +120,9 @@ fleet_state_prune() {
   base=$(fleet_state_base 2>/dev/null) || return 0
   fleet_dir_is_private "$base" || return 0
   for dir in "$base"/fleet-*; do
-    [ -d "$dir" ] && [ ! -L "$dir" ] || continue
+    if [ ! -d "$dir" ] || [ -L "$dir" ]; then
+      continue
+    fi
     name="${dir##*/}"
     [[ "$name" =~ ^fleet-[0-9]+$ ]] || continue
     tmux has-session -t "=$name" 2>/dev/null || rm -rf -- "$dir"

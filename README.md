@@ -88,7 +88,7 @@ State is removed when the session ends. Anything left behind by a crash is clear
 
 ```bash
 brew install shellcheck bats-core tmux
-shellcheck --severity=error bin/* lib/*.sh
+shellcheck bin/* lib/*.sh test/*.bats
 bats test
 ```
 

@@ -46,7 +46,9 @@ while true; do
 
   for CMD_FILE in "$RELAY_DIR"/send-*; do
     # Regular files owned by us only: no symlinks, no files dropped by others.
-    [ -f "$CMD_FILE" ] && [ ! -L "$CMD_FILE" ] && [ -O "$CMD_FILE" ] || continue
+    if [ ! -f "$CMD_FILE" ] || [ -L "$CMD_FILE" ] || [ ! -O "$CMD_FILE" ]; then
+      continue
+    fi
 
     PANE_IDX=$(head -1 "$CMD_FILE")
     KEY=$(tail -1 "$CMD_FILE")
