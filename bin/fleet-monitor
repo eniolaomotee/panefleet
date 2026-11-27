@@ -12,9 +12,10 @@ fi
 
 # shellcheck source=../lib/state.sh
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../lib/state.sh"
+# shellcheck source=../lib/bindings.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../lib/bindings.sh"
 
 STATE_DIR=$(fleet_state_init "$SESSION") || exit 1
-STATE_BASE=$(fleet_state_base) || exit 1
 
 CYAN='\033[0;36m'
 YELLOW='\033[1;33m'
@@ -218,38 +219,25 @@ view_agent_log() {
 PREF_FILE="$STATE_DIR/mouse-pref"
 [ -f "$PREF_FILE" ] || echo "on" > "$PREF_FILE"
 
-# ── Mouse bindings that make zoomed agent panes feel like a native terminal ──
-# If the app in the pane handles the mouse itself (mouse_any_flag — Claude Code
-# does, and scrolls its own transcript), forward wheel events to it. Alt-screen
-# panes have no tmux history, so copy-mode there is an empty buffer — hijacking
-# the wheel makes scrolling appear dead. For plain shell panes, scroll-up enters
-# copy-mode and scrolls the pane buffer like a regular terminal's scrollback.
-tmux bind-key -T root WheelUpPane \
-  if-shell -F -t = "#{||:#{pane_in_mode},#{mouse_any_flag}}" \
-    "send-keys -M" \
-    "select-pane -t = ; copy-mode -e ; send-keys -M"
-tmux bind-key -T root WheelDownPane \
-  if-shell -F -t = "#{||:#{pane_in_mode},#{mouse_any_flag}}" \
-    "send-keys -M" \
-    ""
+# ── Key bindings, scoped to fleet sessions ──
+# tmux key tables are shared by every session on the server, so each binding
+# is wrapped to act only where @panefleet is set and to fall back to whatever
+# the key did before. See lib/bindings.sh.
+tmux set-option -t "$SESSION" @panefleet 1
 
-# Drag-select: releasing the mouse after a drag in copy-mode pipes the selection
-# to pbcopy and exits copy-mode. Result: drag → release → paste anywhere.
-tmux bind-key -T copy-mode    MouseDragEnd1Pane send-keys -X copy-pipe-and-cancel "pbcopy"
-tmux bind-key -T copy-mode-vi MouseDragEnd1Pane send-keys -X copy-pipe-and-cancel "pbcopy"
-
-# ── Bind F2 (root table, no prefix needed) to unzoom + return to monitor ──
-# Using root table so it works even when Claude Code captures Ctrl+b
-# Uses #{session_name} so it targets whichever fleet session you're in, not a hardcoded one
-# Also restores the user's preferred mouse state when returning to control panel.
-# The pref file is read from the private state dir and only on/off is accepted.
-tmux bind-key -T root F2 run-shell " \
-  SES=\$(tmux display-message -p '#{session_name}'); \
-  FLAG=\$(tmux display-message -t \"\$SES:0\" -p '#{window_zoomed_flag}'); \
-  if [ \"\$FLAG\" = '1' ]; then tmux resize-pane -Z -t \"\$SES:0\"; fi; \
-  tmux select-pane -t \"\$SES:0.0\"; \
-  PREF=\$(cat '$STATE_BASE'/\"\$SES\"/mouse-pref 2>/dev/null); \
-  if [ \"\$PREF\" = on ] || [ \"\$PREF\" = off ]; then tmux set-option -t \"\$SES\" mouse \"\$PREF\"; fi"
+BIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+case "$BIN_DIR" in
+  *"'"* | *'"'*)
+    echo "fleet-monitor: install path contains a quote, key bindings not set: $BIN_DIR" >&2
+    ;;
+  *)
+    BINDINGS_FILE="$STATE_DIR/bindings.conf"
+    fleet_bindings_config "$BIN_DIR/fleet-home" > "$BINDINGS_FILE"
+    if [ -s "$BINDINGS_FILE" ]; then
+      tmux source-file "$BINDINGS_FILE"
+    fi
+    ;;
+esac
 
 # Ignore SIGINT (Ctrl+C) and SIGQUIT — accidental hits used to kill the monitor
 # and leave agents orphaned. Use `tmux kill-session -t "$SESSION"` to truly quit.

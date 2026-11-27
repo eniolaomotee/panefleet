@@ -83,6 +83,14 @@ fleet_state_base_init() {
   printf '%s\n' "$base"
 }
 
+# Print the state directory for a session without creating or checking it.
+fleet_state_dir() {
+  local session="$1" base
+  fleet_valid_session "$session" || return 1
+  base=$(fleet_state_base) || return 1
+  printf '%s\n' "$base/$session"
+}
+
 # Create and verify the state directory for a session, then print it.
 # Layout:
 #   name            fleet display name

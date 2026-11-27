@@ -1,0 +1,37 @@
+#!/bin/bash
+# Fleet Home - return to the monitor pane of a fleet session.
+# Run by the F2 key binding: unzooms the window, selects the monitor pane and
+# restores the mouse mode the user chose in the monitor.
+#
+# Usage: fleet-home <tmux-session-name>
+
+SESSION="$1"
+
+if [ -z "$SESSION" ]; then
+  echo "Usage: fleet-home <tmux-session-name>"
+  exit 1
+fi
+
+# shellcheck source=../lib/state.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../lib/state.sh"
+
+if ! fleet_valid_session "$SESSION"; then
+  echo "fleet-home: invalid session name: $SESSION" >&2
+  exit 1
+fi
+
+ZOOMED=$(tmux display-message -t "$SESSION:0" -p '#{window_zoomed_flag}' 2>/dev/null)
+if [ "$ZOOMED" = "1" ]; then
+  tmux resize-pane -Z -t "$SESSION:0"
+fi
+tmux select-pane -t "$SESSION:0.0"
+
+# Only on/off is accepted from the preference file.
+if STATE_DIR=$(fleet_state_dir "$SESSION"); then
+  PREF=$(cat "$STATE_DIR/mouse-pref" 2>/dev/null)
+  if [ "$PREF" = "on" ] || [ "$PREF" = "off" ]; then
+    tmux set-option -t "$SESSION" mouse "$PREF"
+  fi
+fi
+
+exit 0
