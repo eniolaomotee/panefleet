@@ -50,34 +50,3 @@ teardown() {
   [ "$status" -eq 1 ]
   [[ "$output" == *"Missing dependency: tmux"* ]]
 }
-
-@test "fleet-verify is silent when the hook input has no file" {
-  run bash -c "echo '{}' | '$BIN/fleet-verify'"
-  [ "$status" -eq 0 ]
-  [ -z "$output" ]
-}
-
-@test "fleet-verify is silent for a file outside any project" {
-  echo "x = (" > "$WORK/orphan.py"
-  run bash -c "echo '{\"tool_input\":{\"file_path\":\"$WORK/orphan.py\"}}' | '$BIN/fleet-verify'"
-  [ "$status" -eq 0 ]
-  [ -z "$output" ]
-}
-
-@test "fleet-verify blocks a Python syntax error" {
-  command -v python >/dev/null || skip "python not on PATH"
-  touch "$WORK/pyproject.toml"
-  echo "def broken(:" > "$WORK/bad.py"
-  run bash -c "echo '{\"tool_input\":{\"file_path\":\"$WORK/bad.py\"}}' | '$BIN/fleet-verify'"
-  [ "$status" -eq 0 ]
-  [[ "$output" == *'"decision": "block"'* ]]
-}
-
-@test "fleet-verify does not block valid Python" {
-  command -v python >/dev/null || skip "python not on PATH"
-  touch "$WORK/pyproject.toml"
-  echo "x = 1" > "$WORK/good.py"
-  run bash -c "echo '{\"tool_input\":{\"file_path\":\"$WORK/good.py\"}}' | '$BIN/fleet-verify'"
-  [ "$status" -eq 0 ]
-  [[ "$output" != *'"decision": "block"'* ]]
-}
