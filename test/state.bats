@@ -49,7 +49,7 @@ mode_of() {
 stub_launcher_tools() {
   local tool
   export STUB_CALLS="$WORK/stub-calls.log"
-  for tool in fzf bat git claude fleet-telegram; do
+  for tool in fzf bat git claude fleet-telegram fleet-notify; do
     # shellcheck disable=SC2016  # $STUB_CALLS must expand when the stub runs
     printf '#!/bin/bash\necho "%s" >> "$STUB_CALLS"\nexit 0\n' "$tool" > "$STUB/$tool"
     chmod +x "$STUB/$tool"
@@ -154,13 +154,13 @@ load_lib() {
   fleet_state_init fleet-111 >/dev/null
   fleet_state_init fleet-222 >/dev/null
   fleet_state_init my-own-session >/dev/null
-  echo keep > "$BASE/notifications.log"
+  echo keep > "$BASE/unrelated.txt"
   # First has-session call (fleet-111) succeeds, the second (fleet-222) fails.
   TMUX_STUB_ALIVE=1 PATH="$STUB:$PATH" fleet_state_prune
   [ -d "$BASE/fleet-111" ]
   [ ! -e "$BASE/fleet-222" ]
   [ -d "$BASE/my-own-session" ]
-  [ -f "$BASE/notifications.log" ]
+  [ -f "$BASE/unrelated.txt" ]
 }
 
 # ── fleet-relay ──
@@ -230,15 +230,6 @@ load_lib() {
   [ ! -e "$BASE/fleet-e2e" ]
 }
 
-# ── fleet-notify ──
-
-@test "notify logs inside the private state dir and exits 0" {
-  run "$BIN/fleet-notify" fleet-123 "needs input" info
-  [ "$status" -eq 0 ]
-  grep -q 'Agent-fleet-123: needs input' "$BASE/notifications.log"
-  [ "$(mode_of "$BASE")" = "700" ]
-}
-
 # ── fleet (launcher) ──
 
 @test "launcher keeps names, prompts and logs in the private state dir" {
@@ -265,7 +256,7 @@ load_lib() {
   grep -q "claude < '$SESSION_DIR/prompt-1.txt'" "$TMUX_STUB_LOG"
 }
 
-@test "launcher does not start a Telegram bridge" {
+@test "launcher does not start any background helper" {
   stub_launcher_tools
   mkdir "$WORK/project"
   cd "$WORK/project"
@@ -273,7 +264,9 @@ load_lib() {
   [ "$status" -eq 0 ]
   [[ "$output" != *"command not found"* ]]
   # The stub is on PATH, so any attempt to start it would be recorded.
-  refute grep -qx 'fleet-telegram' "$STUB_CALLS"
+  refute grep -qxE 'fleet-(telegram|notify)' "$STUB_CALLS"
+  # The only things in the base dir are session directories.
+  [ -z "$(find "$BASE" -maxdepth 1 -type f)" ]
 }
 
 @test "launcher stops and kills its session when the state dir cannot be trusted" {
