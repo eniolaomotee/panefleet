@@ -60,7 +60,40 @@ To stop everything: `tmux kill-session -t <session-name>`. The session name is s
 
 ### Verify hook (optional)
 
-TODO: document the `PostToolUse` entry for `~/.claude/settings.json`.
+`fleet-verify` checks each file an agent edits and reports problems back to that agent. It is separate from the launcher and works in any Claude Code session.
+
+Add it to `~/.claude/settings.json`, or to `.claude/settings.json` in a project, using the full path to your checkout:
+
+```json
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/path/to/panefleet/bin/fleet-verify",
+            "timeout": 60
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+What it reports:
+
+| File type | Check | Result |
+| --- | --- | --- |
+| `.py` | `python -m py_compile` | Syntax errors are sent to the agent as blocking feedback |
+| `.py` | `pyright`, if installed | Type errors are added to the agent's context |
+| `.js` | `node --check` | Syntax errors are sent to the agent as blocking feedback |
+| `.ts`, `.tsx` | `tsc --noEmit`, if the project has a `tsconfig.json` | Type errors in the edited file are added to the agent's context |
+| `.js`, `.jsx`, `.ts`, `.tsx` | `eslint`, if the project has a config and a local install | Lint errors are added to the agent's context |
+
+The edit has already happened by the time the hook runs, so "blocking" means the agent is told to fix the error, not that the edit is undone. The hook stays silent when a file is fine, when it is not inside a Python or Node project, or when `jq` is missing. Each report is capped at 2000 characters. Running `tsc` on a large project can be slow, which is what the `timeout` is for.
 
 ## Where state lives
 
