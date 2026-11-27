@@ -3,21 +3,170 @@
 # ==============================
 # Fleet v6 – Grid Layout with Monitor + Agent Panes
 # ==============================
+# With no arguments this walks through an interactive menu. With any option
+# it never prompts: flags answer the same questions the menu asks, and the
+# rest take defaults. Run `fleet --help` for the list.
 
 PARENT_DIR=$(pwd)
 
 # shellcheck source=../lib/state.sh
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../lib/state.sh"
 
+usage() {
+  cat <<'USAGE'
+Usage: fleet                 interactive menu
+       fleet [options]       launch without prompts
+
+Options:
+  -n, --agents N       Number of agents (default 1). In phase mode, per phase.
+  -r, --repo PATH      Directory the agents work in (default: current directory)
+      --name NAME      Fleet name shown to other tools (default: directory name)
+      --feature TEXT   Feature mode: every agent is briefed on this feature
+      --plan FILE      Phase mode: brief agents from a markdown plan. Each
+                       "### Phase ..." section becomes one group of agents.
+      --phase TEXT     With --plan: only the phase whose heading contains TEXT.
+                       Repeat for several phases. Default: every phase.
+      --worktree NAME  Create git worktree ../wt-NAME on a new branch NAME
+                       and run the agents there
+      --no-attach      Create the session and print its name, do not attach
+  -h, --help           Show this help
+
+Examples:
+  fleet --agents 3
+  fleet --feature "CSV export" --agents 2 --repo ~/code/api
+  fleet --plan docs/plan.md --phase "Phase 2" --no-attach
+USAGE
+}
+
+die() {
+  echo "fleet: $1" >&2
+  echo "Try 'fleet --help'." >&2
+  exit 2
+}
+
+# -------------------------------
+# Options
+# -------------------------------
+INTERACTIVE=1
+ATTACH=1
+OPT_AGENTS=1
+OPT_REPO="."
+OPT_NAME=""
+OPT_FEATURE=""
+OPT_PLAN=""
+OPT_PHASES=()
+OPT_WORKTREE=""
+
+if [ "$#" -gt 0 ]; then
+  INTERACTIVE=0
+fi
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -h | --help)
+      usage
+      exit 0
+      ;;
+    --no-attach)
+      ATTACH=0
+      shift
+      continue
+      ;;
+    -n | --agents | -r | --repo | --name | --feature | --plan | --phase | --worktree)
+      if [ "$#" -lt 2 ]; then
+        die "option $1 needs a value"
+      fi
+      ;;
+    *)
+      die "unknown option: $1"
+      ;;
+  esac
+  case "$1" in
+    -n | --agents) OPT_AGENTS="$2" ;;
+    -r | --repo) OPT_REPO="$2" ;;
+    --name) OPT_NAME="$2" ;;
+    --feature) OPT_FEATURE="$2" ;;
+    --plan) OPT_PLAN="$2" ;;
+    --phase) OPT_PHASES+=("$2") ;;
+    --worktree) OPT_WORKTREE="$2" ;;
+  esac
+  shift 2
+done
+
+# Validate everything the flags say before any tmux session exists, so a typo
+# never leaves a half-built fleet behind.
+if [ "$INTERACTIVE" = 0 ]; then
+  if ! [[ "$OPT_AGENTS" =~ ^[1-9][0-9]*$ ]]; then
+    die "--agents must be a positive number, got: $OPT_AGENTS"
+  fi
+  if [ ! -d "$OPT_REPO" ]; then
+    die "--repo is not a directory: $OPT_REPO"
+  fi
+  OPT_REPO=$(cd "$OPT_REPO" && pwd)
+  if [ -n "$OPT_PLAN" ] && [ -n "$OPT_FEATURE" ]; then
+    die "--plan and --feature cannot be combined"
+  fi
+  if [ "${#OPT_PHASES[@]}" -gt 0 ] && [ -z "$OPT_PLAN" ]; then
+    die "--phase needs --plan"
+  fi
+  if [ -n "$OPT_WORKTREE" ]; then
+    if [ -n "$OPT_PLAN" ] || [ -n "$OPT_FEATURE" ]; then
+      die "--worktree cannot be combined with --plan or --feature"
+    fi
+    if ! [[ "$OPT_WORKTREE" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]*$ ]]; then
+      die "--worktree is not a usable branch name: $OPT_WORKTREE"
+    fi
+  fi
+
+  MODE=4
+  if [ -n "$OPT_FEATURE" ]; then
+    MODE=2
+  fi
+  if [ -n "$OPT_PLAN" ]; then
+    MODE=1
+    if [ ! -f "$OPT_PLAN" ]; then
+      die "--plan is not a file: $OPT_PLAN"
+    fi
+    PLAN_FILE="$(cd "$(dirname "$OPT_PLAN")" && pwd)/$(basename "$OPT_PLAN")"
+    ALL_PHASES=$(grep -E "^### Phase" "$PLAN_FILE")
+    if [ -z "$ALL_PHASES" ]; then
+      die "no '### Phase' headings found in $OPT_PLAN"
+    fi
+    if [ "${#OPT_PHASES[@]}" -eq 0 ]; then
+      SELECTED_PHASES="$ALL_PHASES"
+    else
+      SELECTED_PHASES=""
+      for WANTED in "${OPT_PHASES[@]}"; do
+        MATCHES=$(grep -F -- "$WANTED" <<< "$ALL_PHASES")
+        if [ -z "$MATCHES" ]; then
+          die "--phase '$WANTED' matches no heading in $OPT_PLAN"
+        fi
+        if [ "$(wc -l <<< "$MATCHES" | tr -d ' ')" -gt 1 ]; then
+          die "--phase '$WANTED' matches more than one heading in $OPT_PLAN"
+        fi
+        SELECTED_PHASES="${SELECTED_PHASES:+$SELECTED_PHASES$'\n'}$MATCHES"
+      done
+    fi
+  fi
+fi
+
 # -------------------------------
 # Check dependencies
 # -------------------------------
-for cmd in tmux fzf bat git; do
+# fzf and bat are only used by the menu's plan and phase pickers.
+DEPS=(tmux git)
+if [ "$INTERACTIVE" = 1 ]; then
+  DEPS+=(fzf bat)
+fi
+
+for cmd in "${DEPS[@]}"; do
   if ! command -v "$cmd" &>/dev/null; then
     echo "Missing dependency: $cmd"
     exit 1
   fi
 done
+
+if [ "$INTERACTIVE" = 1 ]; then
 
 echo ""
 echo "Select Fleet mode:"
@@ -53,6 +202,10 @@ done
 
 REPO_PATH="$repo"
 
+else
+  REPO_PATH="$OPT_REPO"
+fi
+
 # -------------------------------
 # Tmux session setup
 # -------------------------------
@@ -65,10 +218,20 @@ REPO_BASENAME=$(basename "$REPO_PATH")
 if [ "$REPO_BASENAME" = "." ]; then
   REPO_BASENAME=$(basename "$PARENT_DIR")
 fi
-read -r -p "Fleet name [$REPO_BASENAME]: " FLEET_NAME
+if [ "$INTERACTIVE" = 1 ]; then
+  read -r -p "Fleet name [$REPO_BASENAME]: " FLEET_NAME
+else
+  FLEET_NAME="$OPT_NAME"
+fi
 FLEET_NAME="${FLEET_NAME:-$REPO_BASENAME}"
 
-tmux new-session -d -s "$FLEET_SESSION" -n "Fleet" -x "$(tput cols)" -y "$(tput lines)"
+# Without a terminal (scripts, CI) tput has no size to report.
+COLS=$(tput cols 2>/dev/null)
+ROWS=$(tput lines 2>/dev/null)
+[[ "$COLS" =~ ^[0-9]+$ ]] || COLS=200
+[[ "$ROWS" =~ ^[0-9]+$ ]] || ROWS=50
+
+tmux new-session -d -s "$FLEET_SESSION" -n "Fleet" -x "$COLS" -y "$ROWS"
 
 # Private per-user state directory (mode 700). Clear out state from fleets
 # that are no longer running, then create ours.
@@ -103,6 +266,8 @@ queue_agent () {
 
 if [ "$MODE" == "1" ]; then
 
+if [ "$INTERACTIVE" = 1 ]; then
+
 echo ""
 echo "Searching for markdown plans..."
 
@@ -131,6 +296,8 @@ if [ -z "$SELECTED_PHASES" ]; then
   exit 1
 fi
 
+fi
+
 AGENT_COUNTER=0
 
 while IFS= read -r PHASE_NAME; do
@@ -139,7 +306,11 @@ while IFS= read -r PHASE_NAME; do
 
   echo ""
   echo "─── $PHASE_NAME ───"
-  read -r -p "How many sessions for this phase? " COUNT </dev/tty
+  if [ "$INTERACTIVE" = 1 ]; then
+    read -r -p "How many sessions for this phase? " COUNT </dev/tty
+  else
+    COUNT="$OPT_AGENTS"
+  fi
 
   for ((i=1;i<=COUNT;i++)); do
     AGENT_COUNTER=$((AGENT_COUNTER + 1))
@@ -179,8 +350,12 @@ fi
 
 if [ "$MODE" == "2" ]; then
 
-echo ""
-read -r -p "Feature name: " FEATURE
+if [ "$INTERACTIVE" = 1 ]; then
+  echo ""
+  read -r -p "Feature name: " FEATURE
+else
+  FEATURE="$OPT_FEATURE"
+fi
 
 PROMPT="You are an autonomous coding agent.
 
@@ -192,7 +367,11 @@ $FEATURE
 
 Awaiting user instruction."
 
-read -r -p "How many Claude sessions? " COUNT
+if [ "$INTERACTIVE" = 1 ]; then
+  read -r -p "How many Claude sessions? " COUNT
+else
+  COUNT="$OPT_AGENTS"
+fi
 
 for ((i=1;i<=COUNT;i++))
 do
@@ -257,22 +436,39 @@ fi
 
 if [ "$MODE" == "4" ]; then
 
-echo ""
-read -r -p "Optional branch/worktree? (y/n) " WORKTREE
+if [ "$INTERACTIVE" = 1 ]; then
+  echo ""
+  read -r -p "Optional branch/worktree? (y/n) " WORKTREE
+  if [ "$WORKTREE" == "y" ]; then
+    read -r -p "Branch name: " BRANCH
+  fi
+elif [ -n "$OPT_WORKTREE" ]; then
+  WORKTREE="y"
+  BRANCH="$OPT_WORKTREE"
+fi
 
 if [ "$WORKTREE" == "y" ]; then
 
-  read -r -p "Branch name: " BRANCH
-
   SAFE_BRANCH=$(echo "$BRANCH" | tr ' ' '-')
+  # Slashes are fine in a branch name but not in the worktree directory name.
+  WORKTREE_PATH="$REPO_PATH/../wt-${SAFE_BRANCH//\//-}"
 
-  git -C "$REPO_PATH" worktree add "$REPO_PATH/../wt-$SAFE_BRANCH" -b "$SAFE_BRANCH"
+  if ! git -C "$REPO_PATH" worktree add "$WORKTREE_PATH" -b "$SAFE_BRANCH"; then
+    echo "fleet: could not create worktree $WORKTREE_PATH" >&2
+    tmux kill-session -t "$FLEET_SESSION" 2>/dev/null
+    fleet_state_remove "$FLEET_SESSION"
+    exit 1
+  fi
 
-  REPO_PATH="$REPO_PATH/../wt-$SAFE_BRANCH"
+  REPO_PATH="$WORKTREE_PATH"
 
 fi
 
-read -r -p "How many Claude sessions to launch? " COUNT
+if [ "$INTERACTIVE" = 1 ]; then
+  read -r -p "How many Claude sessions to launch? " COUNT
+else
+  COUNT="$OPT_AGENTS"
+fi
 
 PROMPT="You are an autonomous coding agent.
 
@@ -350,6 +546,11 @@ tmux send-keys -t "$FLEET_SESSION:0.0" "fleet-monitor '$FLEET_SESSION'" Enter
 
 # Focus on the monitor pane
 tmux select-pane -t "$FLEET_SESSION:0.0"
+
+if [ "$ATTACH" = 0 ]; then
+  echo "$FLEET_SESSION"
+  exit 0
+fi
 
 # Attach to session (switch-client when already inside tmux — attach refuses to nest)
 if [ -n "$TMUX" ]; then
