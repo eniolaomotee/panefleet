@@ -23,7 +23,7 @@ TODO: an honest comparison with subagents, background agents and worktrees in Cl
 
 - macOS (clipboard copy uses `pbcopy`; Linux is untested)
 - bash, tmux, git
-- [fzf](https://github.com/junegunn/fzf) and [bat](https://github.com/sharkdp/bat)
+- [fzf](https://github.com/junegunn/fzf) and [bat](https://github.com/sharkdp/bat), for the interactive menu only
 - [Claude Code](https://claude.com/claude-code) available as `claude`
 - `jq` for the verify hook
 
@@ -44,7 +44,32 @@ From a directory that is a git repo, or that contains git repos:
 fleet
 ```
 
-Choose a mode, a repo and the number of agents. You land in the monitor pane.
+With no arguments you get a menu: choose a mode, a repo and the number of agents. You land in the monitor pane.
+
+To skip the menu, pass options. With any option `fleet` never prompts:
+
+```bash
+fleet --agents 3                                   # three agents in the current directory
+fleet --feature "CSV export" --agents 2 --repo ~/code/api
+fleet --plan docs/plan.md --phase "Phase 2"        # brief agents from one section of a plan
+fleet --agents 2 --worktree feature/login          # work in a new git worktree
+```
+
+| Option | Meaning |
+| --- | --- |
+| `-n`, `--agents N` | Number of agents, default 1. In phase mode, per phase. |
+| `-r`, `--repo PATH` | Directory the agents work in. Default: current directory. |
+| `--name NAME` | Fleet name. Default: the directory name. |
+| `--feature TEXT` | Every agent is briefed on this feature. |
+| `--plan FILE` | Brief agents from a markdown plan. Each `### Phase ...` section becomes one group of agents. |
+| `--phase TEXT` | With `--plan`: only the phase whose heading contains TEXT. Repeatable. Default: every phase. |
+| `--worktree NAME` | Create git worktree `../wt-NAME` on a new branch `NAME` and run the agents there. |
+| `--no-attach` | Create the session and print its name without attaching. |
+| `-h`, `--help` | Show the help text. |
+
+A mistake in the options stops the launch before any tmux session is created. The menu also offers a hybrid mode that has no flag yet.
+
+Inside the monitor:
 
 | Key | Action |
 | --- | --- |
@@ -112,7 +137,7 @@ State is removed when the session ends. Anything left behind by a crash is clear
 ## Known limits
 
 - **tmux key bindings are server-wide.** The monitor binds `F2`, the mouse wheel and drag-to-copy in the root table, which affects your other tmux sessions until the server restarts.
-- **The launcher is interactive only.** There are no flags or config file yet.
+- **No config file.** The launcher takes flags, but there is no way yet to save defaults.
 - **`fleet-verify` covers Python and JavaScript/TypeScript only.**
 - **The commands are still named `fleet*`,** not `panefleet`.
 
