@@ -21,8 +21,8 @@ TODO: an honest comparison with subagents, background agents and worktrees in Cl
 
 ## Requirements
 
-- macOS (clipboard copy uses `pbcopy`; Linux is untested)
-- bash, tmux, git
+- macOS or Linux. It is developed on macOS, and CI runs the tests on Linux.
+- bash, git and tmux 3.0 or newer
 - [fzf](https://github.com/junegunn/fzf) and [bat](https://github.com/sharkdp/bat)
 - [Claude Code](https://claude.com/claude-code) available as `claude`
 - `jq` for the verify hook
@@ -95,6 +95,12 @@ What it reports:
 
 The edit has already happened by the time the hook runs, so "blocking" means the agent is told to fix the error, not that the edit is undone. The hook stays silent when a file is fine, when it is not inside a Python or Node project, or when `jq` is missing. Each report is capped at 2000 characters. Running `tsc` on a large project can be slow, which is what the `timeout` is for.
 
+## Key bindings and your other tmux sessions
+
+tmux key tables are shared by every session on the server, so the monitor cannot bind a key for one session only. It binds `F2`, the mouse wheel and drag-to-copy with a check instead: the fleet behaviour runs only in sessions the monitor has marked with the `@panefleet` option, and in every other session the key does what it did before. If you already had one of those keys bound, your command is kept as the fallback.
+
+Drag-to-copy uses the first clipboard tool it finds: `pbcopy`, `wl-copy` (on Wayland), `xclip`, then `xsel`. With none of them installed, tmux's own copy behaviour applies.
+
 ## Where state lives
 
 Each fleet keeps its runtime state in a private directory:
@@ -111,7 +117,7 @@ State is removed when the session ends. Anything left behind by a crash is clear
 
 ## Known limits
 
-- **tmux key bindings are server-wide.** The monitor binds `F2`, the mouse wheel and drag-to-copy in the root table, which affects your other tmux sessions until the server restarts.
+- **The key bindings stay registered until the tmux server restarts.** They only act inside fleet sessions (see [Key bindings and your other tmux sessions](#key-bindings-and-your-other-tmux-sessions)), but `tmux list-keys` will still show the wrappers after a fleet ends.
 - **The launcher is interactive only.** There are no flags or config file yet.
 - **`fleet-verify` covers Python and JavaScript/TypeScript only.**
 - **The commands are still named `fleet*`,** not `panefleet`.
