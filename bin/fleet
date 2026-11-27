@@ -343,10 +343,6 @@ tmux set-option -t "$FLEET_SESSION" mouse on
 tmux set-option -t "$FLEET_SESSION" pane-border-status top
 tmux set-option -t "$FLEET_SESSION" pane-border-format " #(cat '$NAME_DIR/#{pane_index}' 2>/dev/null || echo 'Pane #{pane_index}') "
 
-# Launch notification watcher in background
-fleet-notify "$FLEET_SESSION" &
-NOTIFY_PID=$!
-
 # Launch relay in background inside tmux, then start monitor
 tmux send-keys -t "$FLEET_SESSION:0.0" "fleet-relay '$FLEET_SESSION' &" Enter
 sleep 1
@@ -354,9 +350,6 @@ tmux send-keys -t "$FLEET_SESSION:0.0" "fleet-monitor '$FLEET_SESSION'" Enter
 
 # Focus on the monitor pane
 tmux select-pane -t "$FLEET_SESSION:0.0"
-
-# Clean up notifier on exit
-trap 'kill "$NOTIFY_PID" 2>/dev/null' EXIT
 
 # Attach to session (switch-client when already inside tmux — attach refuses to nest)
 if [ -n "$TMUX" ]; then
